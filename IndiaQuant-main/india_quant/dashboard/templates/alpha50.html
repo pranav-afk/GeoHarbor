@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}Alpha 50 Screener · India Quant{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>⚡ Alpha 50 Screener <span class="desc" style="font-size:0.85rem;font-weight:400">v2 — EMA · RS · 52W · Sector</span></h1>
+    <div class="desc">Nifty Alpha 50 — pre-market intraday picks ranked by 9 factors.</div>
+  </div>
+  <form action="/alpha50" method="get" style="display:flex;gap:0.5rem;align-items:center">
+    <input class="input" name="capital" type="number" value="{{ capital|int }}" placeholder="Capital ₹" style="width:120px">
+    <input class="input" name="risk" type="number" step="0.1" value="{{ risk_pct }}" placeholder="Risk %" style="width:80px">
+    <input class="input" name="top" type="number" value="8" placeholder="Top N" style="width:70px">
+    <button class="btn primary" type="submit">Refresh</button>
+  </form>
+</div>
+
+{% if plans and plans[0].get('skip_day') %}
+  <div class="card">
+    <div class="card-bd" style="text-align:center;padding:2rem">
+      <div style="font-size:2rem;margin-bottom:0.5rem">🚨</div>
+      <div style="font-size:1.2rem;font-weight:600;color:var(--neg)">{{ plans[0].reason }}</div>
+      <div class="desc" style="margin-top:0.5rem">No trades recommended. Check back when VIX drops below 20.</div>
+    </div>
+  </div>
+
+{% elif not plans %}
+  <div class="card">
+    <div class="card-bd" style="text-align:center;padding:2rem">
+      <div class="muted">No stocks passed the screener filters today.</div>
+      <div class="desc" style="margin-top:0.5rem">Run: <code>python main.py --pipeline</code></div>
+    </div>
+  </div>
+
+{% else %}
+
+  {# ── Summary strip ── #}
+  {% set long_count   = plans | selectattr('bias', 'equalto', 'LONG')  | list | length %}
+  {% set short_count  = plans | selectattr('bias', 'equalto', 'SHORT') | list | length %}
+  {% set either_count = plans | selectattr('bias', 'equalto', 'EITHER')| list | length %}
+
+  <div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center">
+    <div class="card" style="padding:0.6rem 1.2rem;text-align:center;min-width:80px">
+      <div class="num pos" style="font-size:1.4rem;font-weight:700">{{ long_count }}</div>
+      <div class="desc">LONG</div>
+    </div>
+    <div class="card" style="padding:0.6rem 1.2rem;text-align:center;min-width:80px">
+      <div class="num neg" style="font-size:1.4rem;font-weight:700">{{ short_count }}</div>
+      <div class="desc">SHORT</div>
+    </div>
+    <div class="card" style="padding:0.6rem 1.2rem;text-align:center;min-width:80px">
+      <div class="num text-3" style="font-size:1.4rem;font-weight:700">{{ either_count }}</div>
+      <div class="desc">EITHER</div>
+    </div>
+    <div class="card" style="padding:0.6rem 1.2rem;text-align:center;min-width:80px">
+      <div class="num" style="font-size:1.4rem;font-weight:700">{{ plans|length }}</div>
+      <div class="desc">Total</div>
+    </div>
+    <div class="desc" style="margin-left:auto">
+      {{ today }} &nbsp;·&nbsp; ₹{{ "{:,.0f}".format(capital) }} capital &nbsp;·&nbsp; {{ risk_pct }}% risk
+      {% if plans[0].vix_half_size %}
+        &nbsp;·&nbsp; <span style="color:var(--neg);font-weight:600">⚠ VIX elevated — sizes halved</span>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── Main table ── #}
+  <div class="card">
+    <div class="card-bd flush">
+      <div class="table-wrap">
+        <table class="x">
+          <thead>
+            <tr>
+              <th class="text-right">#</th>
+              <th>Ticker</th>
+              <th class="text-right">Score</th>
+              <th>Bias</th>
+              <th class="text-right">Prev ₹</th>
+              <th class="text-right">ATR%</th>
+              <th class="text-right">Gap%</th>
+              {# New indicators #}
+              <th class="text-right" title="EMA 9/21/50 stack">EMA</th>
+              <th class="text-right" title="Relative strength vs Nifty 5-day">RS 5d</th>
+              <th class="text-right" title="Did close break prev day high/low?">PDH/L</th>
+              <th class="text-right" title="% from 52-week high">52W%</th>
+              <th class="text-right" title="Sector ETF 1-day return">Sect%</th>
+              <th class="text-right">ADX</th>
+              <th class="text-right">VolSg</th>
+              {# Levels #}
+              <th class="text-right">Trigger</th>
+              <th class="text-right">Stop</th>
+              <th class="text-right">Target 1</th>
+              <th class="text-right">Target 2</th>
+              <th class="text-right">R:R1</th>
+              <th class="text-right">R:R2</th>
+              <th class="text-right">Qty</th>
+              <th class="text-right">Margin ₹</th>
+              <th class="text-right">Loss ₹</th>
+              <th class="text-right">Profit T1 ₹</th>
+              <th>Verdict</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in plans %}
+            {% set is_long  = p.bias == 'LONG' %}
+            {% set is_short = p.bias == 'SHORT' %}
+            {% set trigger = p.long_trigger      if is_long else p.short_trigger %}
+            {% set stop    = p.long_stop         if is_long else p.short_stop %}
+            {% set t1      = p.long_target1      if is_long else p.short_target1 %}
+            {% set t2      = p.long_target2      if is_long else p.short_target2 %}
+            {% set rr1     = p.long_rr1          if is_long else p.short_rr1 %}
+            {% set rr2     = p.long_rr2          if is_long else p.short_rr2 %}
+            {% set qty     = p.long_qty          if is_long else p.short_qty %}
+            {% set margin  = p.long_margin_inr   if is_long else p.short_margin_inr %}
+            {% set maxloss = p.long_max_loss_inr if is_long else p.short_max_loss_inr %}
+            {% set profit1 = p.long_profit1_inr  if is_long else p.short_profit1_inr %}
+            <tr>
+              <td class="text-right num text-3">{{ p.rank }}</td>
+              <td>
+                <a class="ticker-pill" href="/ticker/{{ p.ticker.replace('.NS','').replace('.BO','') }}">
+                  {{ p.ticker.replace('.NS','').replace('.BO','') }}
+                </a>
+              </td>
+              <td class="text-right num {% if p.score >= 75 %}pos{% elif p.score >= 50 %}{% else %}neg{% endif %}">
+                {{ p.score }}
+              </td>
+              <td>
+                {% if is_long %}<span class="badge bull">▲ LONG</span>
+                {% elif is_short %}<span class="badge bear">▼ SHORT</span>
+                {% else %}<span class="badge mixed">↔ EITHER</span>{% endif %}
+              </td>
+              <td class="text-right num">{{ p.prev_close }}</td>
+              <td class="text-right num {% if p.atr_pct <= 3 %}pos{% else %}mixed{% endif %}">{{ p.atr_pct }}%</td>
+              <td class="text-right num {% if p.gap_pct > 0 %}pos{% elif p.gap_pct < 0 %}neg{% endif %}">
+                {{ '%+.2f' % p.gap_pct }}%
+              </td>
+
+              {# EMA stack #}
+              <td class="text-right">
+                {% if p.ema_stack == 'bullish' %}<span class="badge bull">▲</span>
+                {% elif p.ema_stack == 'bearish' %}<span class="badge bear">▼</span>
+                {% else %}<span class="muted">~</span>{% endif %}
+              </td>
+
+              {# Relative strength #}
+              <td class="text-right num {% if p.rs_vs_nifty_5d and p.rs_vs_nifty_5d > 0 %}pos{% elif p.rs_vs_nifty_5d and p.rs_vs_nifty_5d < 0 %}neg{% else %}muted{% endif %}">
+                {% if p.rs_vs_nifty_5d is not none %}{{ '%+.1f' % p.rs_vs_nifty_5d }}{% else %}—{% endif %}
+              </td>
+
+              {# Previous day high/low #}
+              <td class="text-right">
+                {% if p.prev_day_signal == 'above_high' %}<span class="badge bull">↑ AbvH</span>
+                {% elif p.prev_day_signal == 'below_low' %}<span class="badge bear">↓ BlwL</span>
+                {% else %}<span class="muted">inside</span>{% endif %}
+              </td>
+
+              {# 52W high proximity #}
+              <td class="text-right num {% if p.week52_high_pct and p.week52_high_pct >= -5 %}pos{% elif p.week52_high_pct and p.week52_high_pct <= -20 %}neg{% else %}muted{% endif %}">
+                {% if p.week52_high_pct is not none %}{{ '%+.1f' % p.week52_high_pct }}%{% else %}—{% endif %}
+              </td>
+
+              {# Sector momentum #}
+              <td class="text-right num {% if p.sector_momentum and p.sector_momentum > 0.3 %}pos{% elif p.sector_momentum and p.sector_momentum < -0.3 %}neg{% else %}muted{% endif %}">
+                {% if p.sector_momentum is not none %}{{ '%+.1f' % p.sector_momentum }}%{% else %}—{% endif %}
+              </td>
+
+              <td class="text-right num {% if p.adx and p.adx >= 25 %}pos{% else %}muted{% endif %}">
+                {{ p.adx if p.adx else '—' }}
+              </td>
+              <td class="text-right num {% if p.volume_surge >= 1.5 %}pos{% else %}muted{% endif %}">
+                {{ p.volume_surge }}×
+              </td>
+
+              {# Levels #}
+              <td class="text-right num" style="font-weight:600">{{ trigger }}</td>
+              <td class="text-right num neg">{{ stop }}</td>
+              <td class="text-right num pos">{{ t1 }}</td>
+              <td class="text-right num pos">{{ t2 }}</td>
+              <td class="text-right num {% if rr1 >= 1.5 %}pos{% else %}mixed{% endif %}">{{ rr1 }}</td>
+              <td class="text-right num {% if rr2 >= 2.0 %}pos{% else %}mixed{% endif %}">{{ rr2 }}</td>
+              <td class="text-right num" style="font-weight:600">{{ qty }}</td>
+              <td class="text-right num">{{ "{:,.0f}".format(margin) }}</td>
+              <td class="text-right num neg">{{ "{:,.0f}".format(maxloss) }}</td>
+              <td class="text-right num pos">{{ "{:,.0f}".format(profit1) }}</td>
+
+              <td>
+                {% if p.verdict == 'Bullish' %}<span class="badge bull">Bullish{% if p.conviction %} ({{ p.conviction }}){% endif %}</span>
+                {% elif p.verdict == 'Bearish' %}<span class="badge bear">Bearish{% if p.conviction %} ({{ p.conviction }}){% endif %}</span>
+                {% elif p.verdict %}<span class="badge mixed">{{ p.verdict }}</span>
+                {% else %}<span class="muted">—</span>{% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="25" class="text-center muted">No data — run the pipeline first.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# Legend #}
+  <div class="desc" style="margin-top:0.75rem;display:flex;gap:1.5rem;flex-wrap:wrap">
+    <span><strong>EMA</strong> — 9/21/50 stack direction</span>
+    <span><strong>RS 5d</strong> — stock return minus Nifty return (5 days)</span>
+    <span><strong>PDH/L</strong> — close vs previous day high/low</span>
+    <span><strong>52W%</strong> — % below 52-week high (0% = at high)</span>
+    <span><strong>Sect%</strong> — sector ETF return today</span>
+  </div>
+
+  {# Rules #}
+  <div class="desc" style="margin-top:0.5rem;padding:0 0.1rem">
+    <strong>Rules:</strong>
+    Wait for Trigger before entering &nbsp;·&nbsp;
+    Stop = hard exit &nbsp;·&nbsp;
+    Move stop to breakeven at T1 &nbsp;·&nbsp;
+    Exit all by <strong>15:15 IST</strong> &nbsp;·&nbsp;
+    Sizes halved when VIX &gt; 18
+  </div>
+
+{% endif %}
+{% endblock %}
